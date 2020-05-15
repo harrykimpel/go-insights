@@ -1,0 +1,753 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/newrelic/go-insights/client/client.go (100.0%)</option>
+				
+				<option value="file1">github.com/newrelic/go-insights/client/insert.go (91.9%)</option>
+				
+				<option value="file2">github.com/newrelic/go-insights/client/query.go (93.0%)</option>
+				
+				<option value="file3">github.com/newrelic/go-insights/client/util.go (81.8%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">no coverage</span>
+				<span class="cov1">low coverage</span>
+				<span class="cov2">*</span>
+				<span class="cov3">*</span>
+				<span class="cov4">*</span>
+				<span class="cov5">*</span>
+				<span class="cov6">*</span>
+				<span class="cov7">*</span>
+				<span class="cov8">*</span>
+				<span class="cov9">*</span>
+				<span class="cov10">high coverage</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package client
+
+import (
+        "net/url"
+)
+
+// UseCustomURL allows overriding the default Insights Host / Scheme.
+func (c *Client) UseCustomURL(customURL string) <span class="cov10" title="4">{
+        newURL, _ := url.Parse(customURL)
+        if len(newURL.Scheme) &lt; 1 </span><span class="cov5" title="2">{
+                c.URL.Scheme = "https"
+        }</span> else<span class="cov5" title="2"> {
+                c.URL.Scheme = newURL.Scheme
+        }</span>
+
+        <span class="cov10" title="4">c.URL.Host = newURL.Host
+        c.Logger.Debugf("Using custom URL: %s", c.URL)</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package client
+
+import (
+        "bytes"
+        "context"
+        "encoding/json"
+        "errors"
+        "fmt"
+        "io"
+        "io/ioutil"
+        "net/http"
+        "net/url"
+        "regexp"
+        "strings"
+        "sync/atomic"
+        "time"
+
+        log "github.com/sirupsen/logrus"
+)
+
+// NewInsertClient makes a new client for the user to send data with
+func NewInsertClient(insertKey string, accountID string, euRegion bool) *InsertClient <span class="cov10" title="30">{
+        client := &amp;InsertClient{}
+        client.URL = createInsertURL(accountID, euRegion)
+        client.InsertKey = insertKey
+        client.Logger = log.New()
+        client.Compression = None
+
+        // Defaults
+        client.RequestTimeout = DefaultInsertRequestTimeout
+        client.RetryCount = DefaultRetries
+        client.RetryWait = DefaultRetryWaitTime
+
+        // Defaults for buffered client.
+        // These are here so they can be overwritten before calling start().
+        client.WorkerCount = DefaultWorkerCount
+        client.BatchTime = DefaultBatchTimeout
+        client.BatchSize = DefaultBatchEventCount
+
+        return client
+}</span>
+
+func createInsertURL(accountID string, euRegion bool) *url.URL <span class="cov10" title="30">{
+        var nrInsightsURL = insightsInsertURL
+        if euRegion == true </span><span class="cov0" title="0">{
+                nrInsightsURL = insightsInsertURLEU
+        }</span>
+        <span class="cov10" title="30">insightsURL, _ := url.Parse(nrInsightsURL)
+        insightsURL.Path = fmt.Sprintf("%s/%s/events", insightsURL.Path, accountID)
+        return insightsURL</span>
+}
+
+// Start runs the insert client in batch mode.
+func (c *InsertClient) Start() error <span class="cov3" title="3">{
+        if c.eventQueue != nil </span><span class="cov1" title="1">{
+                return errors.New("the Insights client is already in daemon mode")
+        }</span>
+
+        <span class="cov2" title="2">c.eventQueue = make(chan []byte, c.BatchSize)
+        c.eventTimer = time.NewTimer(c.BatchTime)
+        c.flushQueue = make(chan bool, c.WorkerCount)
+
+        // TODO: errors returned from the call to watchdog()
+        // and batchWorker() are simply dropped on the floor.
+        go func() </span><span class="cov2" title="2">{
+                err := c.watchdog()
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Errorf("watchdog returned error: %v", err)
+                }</span>
+        }()
+
+        <span class="cov2" title="2">go func() </span><span class="cov2" title="2">{
+                err := c.batchWorker()
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Errorf("batch worker returned error: %v", err)
+                }</span>
+        }()
+
+        <span class="cov2" title="2">c.Logger.Infof("the Insights client has launched in daemon mode with endpoint %s", c.URL)
+
+        return nil</span>
+}
+
+// StartListener creates a goroutine that consumes from a channel and
+// Enqueues events as to not block the writing of events to the channel
+//
+func (c *InsertClient) StartListener(inputChannel chan interface{}) (err error) <span class="cov2" title="2">{
+        // Allow this to be called instead of Start()
+        if c.eventQueue == nil </span><span class="cov1" title="1">{
+                if err = c.Start(); err != nil </span><span class="cov0" title="0">{
+                        return err
+                }</span>
+        }
+        <span class="cov2" title="2">if inputChannel == nil </span><span class="cov1" title="1">{
+                return errors.New("channel to listen is nil")
+        }</span>
+
+        <span class="cov1" title="1">go func() </span><span class="cov1" title="1">{
+                err := c.queueWorker(inputChannel)
+                if err != nil </span><span class="cov0" title="0">{
+                        log.Errorf("queue worker returned error: %v", err)
+                }</span>
+        }()
+
+        <span class="cov1" title="1">c.Logger.Info("the Insights client started channel listener")
+
+        return nil</span>
+}
+
+// Validate makes sure the InsertClient is configured correctly for use
+func (c *InsertClient) Validate() error <span class="cov3" title="3">{
+        if correct, _ := regexp.MatchString("collector.newrelic.com/v1/accounts/[0-9]+/events", c.URL.String()); !correct </span><span class="cov1" title="1">{
+                return fmt.Errorf("invalid insert endpoint %s", c.URL)
+        }</span>
+
+        <span class="cov2" title="2">if len(c.InsertKey) &lt; 1 </span><span class="cov1" title="1">{
+                return fmt.Errorf("not a valid license key: %s", c.InsertKey)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+// EnqueueEvent handles the queueing. Only works in batch mode.
+func (c *InsertClient) EnqueueEvent(data interface{}) (err error) <span class="cov6" title="7">{
+        return c.EnqueueEventContext(context.Background(), data)
+}</span>
+
+// EnqueueEventContext handles the queueing. Only works in batch mode. If you wish to be able to avoid blocking
+// forever until the event can be queued, provide a ctx with a deadline or timeout as this function will
+// bail when ctx.Done() is closed and return and error.
+func (c *InsertClient) EnqueueEventContext(ctx context.Context, data interface{}) (err error) <span class="cov6" title="9">{
+        if c.eventQueue == nil </span><span class="cov2" title="2">{
+                return errors.New("queueing not enabled for this client")
+        }</span>
+
+        <span class="cov6" title="7">var jsonData []byte
+        atomic.AddInt64(&amp;c.Statistics.EventCount, 1)
+
+        if jsonData, err = json.Marshal(data); err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov6" title="7">select </span>{
+        case c.eventQueue &lt;- jsonData:<span class="cov5" title="6">
+                return nil</span>
+        case &lt;-ctx.Done():<span class="cov1" title="1">
+                return ctx.Err()</span>
+        }
+}
+
+// PostEvent allows sending a single event directly.
+func (c *InsertClient) PostEvent(data interface{}) error <span class="cov4" title="4">{
+        var jsonData []byte
+
+        switch data := data.(type) </span>{
+        case []byte:<span class="cov2" title="2">
+                jsonData = data</span>
+        case string:<span class="cov1" title="1">
+                jsonData = []byte(data)</span>
+        default:<span class="cov1" title="1">
+                var jsonErr error
+                jsonData, jsonErr = json.Marshal(data)
+                if jsonErr != nil </span><span class="cov0" title="0">{
+                        return fmt.Errorf("error marshaling event data: %s", jsonErr.Error())
+                }</span>
+        }
+
+        // Needs to handle array of events. maybe pull into separate validation func
+        <span class="cov4" title="4">if !strings.Contains(string(jsonData), "eventType") </span><span class="cov1" title="1">{
+                return fmt.Errorf("event data must contain eventType field. %s", jsonData)
+        }</span>
+
+        <span class="cov3" title="3">c.Logger.Debugf("Posting to insights: %s", jsonData)
+
+        if requestErr := c.jsonPostRequest(jsonData); requestErr != nil </span><span class="cov0" title="0">{
+                return requestErr
+        }</span>
+
+        <span class="cov3" title="3">return nil</span>
+}
+
+// Flush gives the user a way to manually flush the queue in the foreground.
+// This is also used by watchdog when the timer expires.
+func (c *InsertClient) Flush() error <span class="cov5" title="5">{
+        if c.flushQueue == nil </span><span class="cov2" title="2">{
+                return errors.New("queueing not enabled for this client")
+        }</span>
+        <span class="cov3" title="3">c.Logger.Debug("Flushing insights client")
+        atomic.AddInt64(&amp;c.Statistics.FlushCount, 1)
+
+        c.flushQueue &lt;- true
+
+        return nil</span>
+}
+
+//
+// queueWorker watches a channel and Enqueues items as they appear so
+// we don't block on EnqueueEvent
+//
+func (c *InsertClient) queueWorker(inputChannel chan interface{}) (err error) <span class="cov2" title="2">{
+        for </span><span class="cov2" title="2">{ //nolint:gosimple
+                select </span>{
+                case msg := &lt;-inputChannel:<span class="cov1" title="1">
+                        err = c.EnqueueEvent(msg)
+                        if err != nil </span><span class="cov1" title="1">{
+                                return err
+                        }</span>
+                }
+        }
+}
+
+//
+// watchdog has a Timer that will send the results once the
+// it has expired.
+//
+func (c *InsertClient) watchdog() (err error) <span class="cov5" title="5">{
+        if c.eventTimer == nil </span><span class="cov1" title="1">{
+                return errors.New("invalid timer for watchdog()")
+        }</span>
+
+        <span class="cov4" title="4">for </span><span class="cov5" title="5">{ //nolint:gosimple
+                select </span>{
+                case &lt;-c.eventTimer.C:<span class="cov2" title="2">
+                        // Timer expired, and we have data, send it
+                        atomic.AddInt64(&amp;c.Statistics.TimerExpiredCount, 1)
+                        c.Logger.Debug("Timeout expired, flushing queued events")
+                        if err = c.Flush(); err != nil </span><span class="cov1" title="1">{
+                                return
+                        }</span>
+                        <span class="cov1" title="1">c.eventTimer.Reset(c.BatchTime)</span>
+                }
+        }
+}
+
+//
+// batchWorker reads []byte from the queue until a threshold is passed,
+// then copies the []byte it has read and sends that batch along to Insights
+// in its own goroutine.
+//
+func (c *InsertClient) batchWorker() (err error) <span class="cov3" title="3">{
+        eventBuf := make([][]byte, c.BatchSize)
+        count := 0
+        for </span><span class="cov6" title="8">{
+                select </span>{
+                case item := &lt;-c.eventQueue:<span class="cov4" title="4">
+                        eventBuf[count] = item
+                        count++
+                        if count &gt;= c.BatchSize </span><span class="cov1" title="1">{
+                                c.grabAndConsumeEvents(count, eventBuf)
+                                count = 0
+                        }</span>
+                case &lt;-c.flushQueue:<span class="cov1" title="1">
+                        if count &gt; 0 </span><span class="cov1" title="1">{
+                                c.grabAndConsumeEvents(count, eventBuf)
+                                count = 0
+                        }</span>
+                }
+        }
+}
+
+// grabAndConsumeEvents makes a copy of the event handles,
+// and asynchronously writes those events in its own goroutine.
+// The write is attempted up to c.RetryCount times.
+//
+// TODO: Any errors encountered doing the write are dropped on the floor.
+// Even the last error (in the event of trying c.RetryCount times)
+// is dropped.
+//
+func (c *InsertClient) grabAndConsumeEvents(count int, eventBuf [][]byte) <span class="cov4" title="4">{
+        if count &lt; c.BatchSize-20 </span><span class="cov1" title="1">{
+                atomic.AddInt64(&amp;c.Statistics.PartialFlushCount, 1) // Allow for some fuzz, although there should be none
+        }</span> else<span class="cov3" title="3"> {
+                atomic.AddInt64(&amp;c.Statistics.FullFlushCount, 1)
+        }</span>
+
+        <span class="cov4" title="4">saved := make([][]byte, count)
+        for i := 0; i &lt; count; i++ </span><span class="cov7" title="10">{
+                saved[i] = eventBuf[i]
+                eventBuf[i] = nil
+        }</span>
+
+        <span class="cov4" title="4">go func(count int, saved [][]byte) </span><span class="cov4" title="4">{
+                // only send the slice that we pulled into the buffer
+                for tries := 0; tries &lt; c.RetryCount; tries++ </span><span class="cov4" title="4">{
+                        if sendErr := c.sendEvents(saved[0:count]); sendErr != nil </span><span class="cov2" title="2">{
+                                if tries+1 &gt;= c.RetryCount </span><span class="cov0" title="0">{
+                                        //failed last retry
+                                        c.Logger.Errorf("Failed to send insights events [%d/%d] times. Retry limit reached -- Abandoning data. Error: %v",
+                                                tries+1, c.RetryCount, sendErr)
+                                }</span> else<span class="cov2" title="2"> {
+                                        c.Logger.Errorf("Failed to send insights events [%d/%d]. Will retry. Error: %v", tries+1, c.RetryCount, sendErr)
+                                        atomic.AddInt64(&amp;c.Statistics.InsightsRetryCount, 1)
+                                        time.Sleep(c.RetryWait)
+                                }</span>
+                        } else<span class="cov2" title="2"> {
+                                break</span>
+                        }
+                }
+                <span class="cov2" title="2">atomic.AddInt64(&amp;c.Statistics.ProcessedEventCount, int64(count))</span>
+        }(count, saved)
+}
+
+// sendEvents accepts a slice of marshalled JSON and sends it to Insights
+//
+func (c *InsertClient) sendEvents(events [][]byte) error <span class="cov5" title="5">{
+        var buf bytes.Buffer
+
+        // Since we already marshalled all of the data into JSON, let's make a
+        // hand-crafted, artisanal JSON array
+        buf.WriteString("[")
+        eventCount := len(events) - 1
+        for e := range events </span><span class="cov7" title="14">{
+                buf.Write(events[e])
+                if e &lt; eventCount </span><span class="cov6" title="9">{
+                        buf.WriteString(",")
+                }</span>
+        }
+        <span class="cov5" title="5">buf.WriteString("]")
+        atomic.AddInt64(&amp;c.Statistics.ByteCount, int64(buf.Len()))
+
+        return c.jsonPostRequest(buf.Bytes())</span>
+}
+
+// SetCompression allows modification of the compression type used in communication
+//
+func (c *InsertClient) SetCompression(compression Compression) <span class="cov2" title="2">{
+        c.Compression = Gzip
+        // use gzip only for now
+        // c.Compression = compression
+        log.Debugf("Compression set: %d", c.Compression)
+}</span>
+
+func (c *InsertClient) jsonPostRequest(body []byte) (err error) <span class="cov7" title="12">{
+        const prependText = "Insights Post: "
+
+        req, reqErr := c.generateJSONPostRequest(body)
+        if reqErr != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("%s: %v", prependText, reqErr)
+        }</span>
+
+        <span class="cov7" title="12">ctx, cancel := context.WithTimeout(req.Context(), c.RequestTimeout)
+        defer cancel()
+        resp, respErr := http.DefaultClient.Do(req.WithContext(ctx))
+        if respErr != nil </span><span class="cov3" title="3">{
+                return fmt.Errorf("%s: %v", prependText, respErr)
+        }</span>
+        <span class="cov6" title="9">defer func() </span><span class="cov6" title="9">{
+                respErr = resp.Body.Close()
+                if respErr != nil &amp;&amp; err == nil </span><span class="cov0" title="0">{
+                        err = respErr // Don't mask previous errors
+                }</span>
+        }()
+
+        <span class="cov6" title="9">if parseErr := c.parseResponse(resp); parseErr != nil </span><span class="cov2" title="2">{
+                return fmt.Errorf("%s: %v", prependText, parseErr)
+        }</span>
+
+        <span class="cov6" title="7">return nil</span>
+}
+
+func (c *InsertClient) generateJSONPostRequest(body []byte) (request *http.Request, err error) <span class="cov8" title="16">{
+        var readBuffer io.Reader
+        var encoding string
+
+        switch c.Compression </span>{
+        case None:<span class="cov7" title="13">
+                c.Logger.Debug("Compression: None")
+                readBuffer = bytes.NewBuffer(body)</span>
+        case Deflate:<span class="cov1" title="1">
+                c.Logger.Debug("Compression: Deflate")
+                readBuffer = nil</span>
+        case Gzip:<span class="cov1" title="1">
+                c.Logger.Debug("Compression: Gzip")
+                readBuffer, err = gZipBuffer(body)
+                encoding = "gzip"</span>
+        case Zlib:<span class="cov1" title="1">
+                c.Logger.Debug("Compression: Zlib")
+                readBuffer = nil</span>
+        }
+
+        <span class="cov8" title="16">if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to read body: %v", err)
+        }</span>
+
+        <span class="cov8" title="16">request, err = http.NewRequest("POST", c.URL.String(), readBuffer)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, fmt.Errorf("failed to construct request for: %s", body)
+        }</span>
+
+        <span class="cov8" title="16">request.Header.Add("Content-Type", "application/json")
+        request.Header.Add("X-Insert-Key", c.InsertKey)
+        if encoding != "" </span><span class="cov1" title="1">{
+                request.Header.Add("Content-Encoding", encoding)
+        }</span>
+
+        <span class="cov8" title="16">return request, nil</span>
+}
+
+// parseResponse checks the Insert response for errors and reports the message
+// if an error happened
+func (c *InsertClient) parseResponse(response *http.Response) error <span class="cov7" title="12">{
+        body, readErr := ioutil.ReadAll(response.Body)
+        if readErr != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to read response body: %s", readErr.Error())
+        }</span>
+
+        <span class="cov7" title="12">if response.StatusCode != 200 </span><span class="cov2" title="2">{
+                return fmt.Errorf("bad response from Insights: %d \n\t%s", response.StatusCode, string(body))
+        }</span>
+
+        <span class="cov7" title="10">c.Logger.Debugf("Response %d body: %s", response.StatusCode, body)
+
+        respJSON := insertResponse{}
+        if err := json.Unmarshal(body, &amp;respJSON); err != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to unmarshal insights response: %v", err)
+        }</span>
+
+        // Success
+        <span class="cov7" title="10">if response.StatusCode == 200 &amp;&amp; respJSON.Success </span><span class="cov6" title="8">{
+                return nil
+        }</span>
+
+        // Non 200 response (or 200 not success, if such a thing)
+        <span class="cov2" title="2">if respJSON.Error == "" </span><span class="cov1" title="1">{
+                respJSON.Error = "Error unknown"
+        }</span>
+
+        <span class="cov2" title="2">return fmt.Errorf("%d: %s", response.StatusCode, respJSON.Error)</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package client
+
+import (
+        "encoding/json"
+        "errors"
+        "fmt"
+        "io/ioutil"
+        "net/http"
+        "net/url"
+        "regexp"
+
+        log "github.com/sirupsen/logrus"
+)
+
+// NewQueryClient makes a new client for the user to query with.
+func NewQueryClient(queryKey, accountID string) *QueryClient <span class="cov8" title="8">{
+        client := &amp;QueryClient{}
+        client.URL = createQueryURL(accountID)
+        client.QueryKey = queryKey
+        client.Logger = log.New()
+
+        // Defaults
+        client.RequestTimeout = DefaultQueryRequestTimeout
+        client.RetryCount = DefaultRetries
+        client.RetryWait = DefaultRetryWaitTime
+
+        return client
+}</span>
+
+func createQueryURL(accountID string) *url.URL <span class="cov10" title="11">{
+        insightsURL, _ := url.Parse(insightsQueryURL)
+        insightsURL.Path = fmt.Sprintf("%s/%s/query", insightsURL.Path, accountID)
+        return insightsURL
+}</span>
+
+// Validate makes sure the QueryClient is configured correctly for use
+func (c *QueryClient) Validate() error <span class="cov5" title="3">{
+        if correct, _ := regexp.MatchString("api.newrelic.com/v1/accounts/[0-9]+/query", c.URL.String()); !correct </span><span class="cov1" title="1">{
+                return fmt.Errorf("invalid query endpoint %s", c.URL)
+        }</span>
+
+        <span class="cov3" title="2">if len(c.QueryKey) &lt; 1 </span><span class="cov1" title="1">{
+                return fmt.Errorf("not a valid license key: %s", c.QueryKey)
+        }</span>
+        <span class="cov1" title="1">return nil</span>
+}
+
+// QueryEvents initiates an Insights query, returns a response for parsing
+func (c *QueryClient) QueryEvents(nrqlQuery string) (response *QueryResponse, err error) <span class="cov6" title="4">{
+        response = &amp;QueryResponse{}
+        err = c.Query(nrqlQuery, response)
+        if err != nil </span><span class="cov5" title="3">{
+                return nil, err
+        }</span>
+
+        <span class="cov1" title="1">return response, nil</span>
+}
+
+// Query initiates an Insights query, with the JSON parsed into 'response' struct
+func (c *QueryClient) Query(nrqlQuery string, response interface{}) (err error) <span class="cov8" title="8">{
+        if response == nil </span><span class="cov1" title="1">{
+                return errors.New("go-insights: Invalid query response can not be nil")
+        }</span>
+
+        <span class="cov8" title="7">err = c.queryRequest(nrqlQuery, response)
+        if err != nil </span><span class="cov6" title="4">{
+                return err
+        }</span>
+        <span class="cov5" title="3">return nil</span>
+}
+
+// queryRequest makes a NRQL query and returns the result in `queryResult`
+// which must be a pointer to a struct that the JSON package can unmarshall
+func (c *QueryClient) queryRequest(nrqlQuery string, queryResult interface{}) (err error) <span class="cov9" title="9">{
+        var request *http.Request
+        var response *http.Response
+
+        queryURL, err := c.generateQueryURL(nrqlQuery)
+        if err != nil </span><span class="cov5" title="3">{
+                return err
+        }</span>
+
+        <span class="cov7" title="6">if queryResult == nil </span><span class="cov1" title="1">{
+                return errors.New("must have pointer for result")
+        }</span>
+
+        <span class="cov7" title="5">request, err = http.NewRequest("GET", queryURL, nil)
+        if err != nil </span><span class="cov0" title="0">{
+                return err
+        }</span>
+
+        <span class="cov7" title="5">request.Header.Add("Accept", "application/json")
+        request.Header.Add("X-Query-Key", c.QueryKey)
+
+        client := &amp;http.Client{Timeout: c.RequestTimeout}
+
+        response, err = client.Do(request)
+        if err != nil </span><span class="cov1" title="1">{
+                err = fmt.Errorf("failed query request for: %v", err)
+                return
+        }</span>
+        <span class="cov6" title="4">defer func() </span><span class="cov6" title="4">{
+                respErr := response.Body.Close()
+                if respErr != nil &amp;&amp; err == nil </span><span class="cov0" title="0">{
+                        err = respErr // Don't mask previous errors
+                }</span>
+        }()
+
+        <span class="cov6" title="4">if response.StatusCode != http.StatusOK </span><span class="cov1" title="1">{
+                err = fmt.Errorf("bad response code: %d", response.StatusCode)
+                return
+        }</span>
+
+        <span class="cov5" title="3">err = c.parseResponse(response, queryResult)
+        if err != nil </span><span class="cov0" title="0">{
+                err = fmt.Errorf("failed query: %v", err)
+        }</span>
+
+        <span class="cov5" title="3">return err</span>
+}
+
+// generateQueryURL URL encodes the NRQL
+func (c *QueryClient) generateQueryURL(nrqlQuery string) (string, error) <span class="cov10" title="11">{
+        if len(nrqlQuery) &lt; minValidNRQLLength </span><span class="cov5" title="3">{
+                fmt.Println("Query was too short")
+                return "", fmt.Errorf("NRQL query is too short [%s]", nrqlQuery)
+        }</span>
+
+        // Use a new set of Values to sanitize the query string
+        <span class="cov8" title="8">urlQuery := url.Values{}
+        urlQuery.Set("nrql", nrqlQuery)
+        queryString := urlQuery.Encode()
+
+        queryURL := c.URL.String() + "?" + queryString
+
+        c.Logger.Debugf("query url is: %s", queryURL)
+
+        return queryURL, nil</span>
+}
+
+// parseQueryResponse takes an HTTP response, make sure it is a valid response,
+// then attempts to decode the JSON body into the `parsedResponse` interface
+func (c *QueryClient) parseResponse(response *http.Response, parsedResponse interface{}) error <span class="cov5" title="3">{
+        body, readErr := ioutil.ReadAll(response.Body)
+        if readErr != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("failed to read response body: %s", readErr.Error())
+        }</span>
+
+        <span class="cov5" title="3">c.Logger.Debugf("Response %d body: %s", response.StatusCode, body)
+
+        if jsonErr := json.Unmarshal(body, parsedResponse); jsonErr != nil </span><span class="cov0" title="0">{
+                return fmt.Errorf("unable to unmarshal query response: %v", jsonErr)
+        }</span>
+
+        <span class="cov5" title="3">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package client
+
+import (
+        "bufio"
+        "bytes"
+        "compress/gzip"
+        "io"
+)
+
+func gZipBuffer(body []byte) (io.Reader, error) <span class="cov10" title="2">{
+        var err error
+
+        readBuffer := bufio.NewReader(bytes.NewReader(body))
+        buffer := bytes.NewBuffer([]byte{})
+        writer := gzip.NewWriter(buffer)
+
+        _, err = readBuffer.WriteTo(writer)
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov10" title="2">err = writer.Close()
+        if err != nil </span><span class="cov0" title="0">{
+                return nil, err
+        }</span>
+
+        <span class="cov10" title="2">return buffer, nil</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
