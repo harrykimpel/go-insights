@@ -41,10 +41,10 @@ func NewInsertClient(insertKey string, accountID string, euRegion bool) *InsertC
 }
 
 func createInsertURL(accountID string, euRegion bool) *url.URL {
-	var nrInsightsURL = insightsInsertURL
-	if euRegion == true {
+	nrInsightsURL := insightsInsertURL
+	if euRegion {
 		nrInsightsURL = insightsInsertURLEU
-	}
+	}	
 	insightsURL, _ := url.Parse(nrInsightsURL)
 	insightsURL.Path = fmt.Sprintf("%s/%s/events", insightsURL.Path, accountID)
 	return insightsURL
