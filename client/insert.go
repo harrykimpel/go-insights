@@ -109,9 +109,9 @@ func (c *InsertClient) StartListener(inputChannel chan interface{}) (err error) 
 
 // Validate makes sure the InsertClient is configured correctly for use
 func (c *InsertClient) Validate() error {
-	if correct, _ := regexp.MatchString("collector.newrelic.com/v1/accounts/[0-9]+/events", c.URL.String()); !correct {
-		return fmt.Errorf("invalid insert endpoint %s", c.URL)
-	}
+	//if correct, _ := regexp.MatchString("collector.newrelic.com/v1/accounts/[0-9]+/events", c.URL.String()); !correct {
+	//	return fmt.Errorf("invalid insert endpoint %s", c.URL)
+	//}
 
 	if len(c.InsertKey) < 1 {
 		return fmt.Errorf("not a valid license key: %s", c.InsertKey)
